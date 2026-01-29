@@ -1,55 +1,71 @@
 <?php
 /**
- * SISTEMA DE VENDAS FARMACÊUTICAS - VERSÃO POSTGRESQL
+ * PDV FARMÁCIA - VERSÃO COMPLETA COM GERENCIAMENTO DE ESTOQUE
  */
 
-// 1. Configuração da Conexão com pgAdmin / PostgreSQL
+// 1. CONFIGURAÇÕES DE CONEXÃO
 $host = 'localhost';
 $db   = 'farmacia_db';
 $user = 'postgres';
-$pass = '1234'; // <--- COLOQUE SUA SENHA DO POSTGRES AQUI
+$pass = '1234'; // <--- Verifique se sua senha ainda é esta
 
 try {
+    // 2. CRIA A CONEXÃO (Fundamental estar no topo)
     $pdo = new PDO("pgsql:host=$host;dbname=$db", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-    // 2. Busca os produtos diretamente do banco de dados
-    $sql = "SELECT * FROM produtos ORDER BY nome ASC";
-    $stmt = $pdo->query($sql);
+    // 3. LÓGICA DE EXCLUSÃO (Agora o $pdo já existe!)
+    if (isset($_GET['excluir'])) {
+        $ean_para_remover = $_GET['excluir'];
+        $sql_delete = "DELETE FROM produtos WHERE ean = :ean";
+        $stmt_delete = $pdo->prepare($sql_delete);
+        $stmt_delete->execute(['ean' => $ean_para_remover]);
+        
+        // Redireciona para limpar a URL e atualizar a lista
+        header("Location: index.php"); 
+        exit;
+    }
+
+    // 4. LÓGICA DE CADASTRO
+    if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['btn_cadastrar'])) {
+        $sql_ins = "INSERT INTO produtos (ean, nome, preco_tabela, categoria) VALUES (:ean, :nome, :preco, :cat)";
+        $stmt_ins = $pdo->prepare($sql_ins);
+        $stmt_ins->execute([
+            'ean'   => $_POST['ean'],
+            'nome'  => $_POST['nome'],
+            'preco' => $_POST['preco'],
+            'cat'   => $_POST['categoria']
+        ]);
+        header("Location: index.php");
+        exit;
+    }
+
+    // 5. BUSCA DE PRODUTOS PARA AS LISTAS
+    $stmt = $pdo->query("SELECT * FROM produtos ORDER BY nome ASC");
     $produtos_db = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 } catch (PDOException $e) {
     die("Erro crítico de conexão: " . $e->getMessage());
 }
 
+// 6. LÓGICA DE PROCESSAMENTO DE VENDA
 $resultado = null;
-
-// 3. Lógica de Processamento da Venda
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['produto_ean'])) {
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['btn_venda'])) {
     $ean_selecionado = $_POST['produto_ean'];
     $fidelidade = isset($_POST['fidelidade']);
 
-    // Busca o produto específico no banco para garantir o preço atualizado
-    $stmt = $pdo->prepare("SELECT * FROM produtos WHERE ean = :ean");
-    $stmt->execute(['ean' => $ean_selecionado]);
-    $item = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if ($item) {
-        $desconto = 0;
-        
-        // Aplica regras de negócio baseadas na categoria vinda do Banco
-        if ($fidelidade) {
-            $desconto = ($item['categoria'] == "Generico") ? 0.50 : 0.15;
+    foreach ($produtos_db as $p) {
+        if ($p['ean'] == $ean_selecionado) {
+            $desconto = ($fidelidade) ? (($p['categoria'] == "Generico") ? 0.50 : 0.15) : 0;
+            $precoFinal = $p['preco_tabela'] * (1 - $desconto);
+            $resultado = [
+                "nome" => $p['nome'],
+                "original" => $p['preco_tabela'],
+                "final" => $precoFinal,
+                "economizou" => $p['preco_tabela'] - $precoFinal
+            ];
+            break;
         }
-        
-        $precoFinal = $item['preco_tabela'] * (1 - $desconto);
-        $resultado = [
-            "nome" => $item['nome'],
-            "original" => $item['preco_tabela'],
-            "final" => $precoFinal,
-            "economizou" => $item['preco_tabela'] - $precoFinal,
-            "categoria" => $item['categoria']
-        ];
     }
 }
 ?>
@@ -58,54 +74,188 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['produto_ean'])) {
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDV Farmácia - Conectado ao Postgres</title>
+    <title>Sistema Farmácia 2.0</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #e9ecef; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .caixa { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 450px; border-top: 8px solid #d32f2f; }
-        h2 { color: #d32f2f; text-align: center; margin-top: 0; }
-        .status-db { font-size: 10px; color: green; text-align: center; margin-bottom: 20px; text-transform: uppercase; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; color: #444; }
-        select, button { width: 100%; padding: 12px; margin: 15px 0; border-radius: 6px; border: 1px solid #ddd; font-size: 16px; }
-        .checkbox-area { display: flex; align-items: center; gap: 10px; cursor: pointer; background: #f8f9fa; padding: 10px; border-radius: 6px; }
-        button { background: #d32f2f; color: white; border: none; cursor: pointer; font-weight: bold; transition: background 0.3s; }
-        button:hover { background: #b71c1c; }
-        .cupom { background: #fffde7; padding: 20px; border: 2px dashed #fbc02d; margin-top: 25px; border-radius: 4px; }
-        .total { font-size: 24px; color: #2e7d32; font-weight: bold; }
-    </style>
+    body { 
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+        background: #fdfdfd; 
+        color: #333;
+        display: flex; 
+        flex-direction: column; 
+        align-items: center; 
+        padding: 20px; 
+    }
+    
+    .container { 
+        display: flex; 
+        gap: 25px; 
+        flex-wrap: wrap; 
+        justify-content: center; 
+        width: 100%; 
+        max-width: 1100px; 
+    }
+
+    /* Cores da Drogaria São Paulo: Azul Marinho e Detalhes Vermelhos */
+    .caixa { 
+        background: white; 
+        padding: 25px; 
+        border-radius: 4px; /* Bordas mais quadradas para um ar sério */
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05); 
+        width: 420px; 
+        border-top: 5px solid #003366; /* Azul Marinho */
+    }
+
+    .estoque { 
+        width: 100%; 
+        max-width: 865px; 
+        border-top-color: #e30613; /* Vermelho destaque */
+    }
+
+    h2, h3 { 
+        color: #003366; 
+        text-transform: uppercase;
+        font-size: 1.2rem;
+        margin-bottom: 20px;
+        letter-spacing: 1px;
+    }
+
+    label { font-weight: 600; font-size: 0.9rem; color: #555; }
+
+    input, select { 
+        width: 100%; 
+        padding: 12px; 
+        margin: 8px 0 18px 0; 
+        border: 1px solid #ccc; 
+        border-radius: 4px;
+        background: #fafafa;
+    }
+
+    button { 
+        cursor: pointer; 
+        font-weight: bold; 
+        border: none; 
+        padding: 15px;
+        border-radius: 4px;
+        transition: 0.2s;
+        text-transform: uppercase;
+    }
+
+    /* Botões seguindo a paleta */
+    .btn-venda { background: #e30613; color: white; }
+    .btn-venda:hover { background: #b3050f; }
+
+    .btn-cadastrar { background: #003366; color: white; }
+    .btn-cadastrar:hover { background: #002244; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th { 
+        background: #003366; 
+        color: white; 
+        padding: 12px; 
+        font-size: 0.85rem;
+        text-transform: uppercase;
+    }
+    td { padding: 12px; border-bottom: 1px solid #eee; font-size: 0.95rem; }
+    
+    .excluir { 
+        color: #e30613; 
+        text-decoration: none; 
+        font-size: 11px; 
+        font-weight: bold; 
+        border: 1px solid #e30613;
+        padding: 4px 8px;
+        border-radius: 3px;
+    }
+    .excluir:hover { background: #e30613; color: white; }
+
+    .recibo {
+        background: #f8f9fa;
+        border-left: 5px solid #003366;
+        padding: 15px;
+        margin-top: 20px;
+    }
+</style>
 </head>
 <body>
 
-<div class="caixa">
-    <div class="status-db">● Banco de Dados: Conectado (PostgreSQL)</div>
-    <h2>PDV Farmácia</h2>
-    
-    <form method="POST">
-        <label>Selecione o Medicamento:</label>
-        <select name="produto_ean">
-            <?php foreach ($produtos_db as $p): ?>
-                <option value="<?= $p['ean'] ?>"><?= $p['nome'] ?> (<?= $p['categoria'] ?>)</option>
-            <?php endforeach; ?>
-        </select>
+<div class="container">
+    <div class="caixa">
+        <h2>🛒 PDV Vendas</h2>
+        <form method="POST">
+            <label>Produto:</label>
+            <select name="produto_ean">
+                <?php foreach ($produtos_db as $p): ?>
+                    <option value="<?= $p['ean'] ?>"><?= $p['nome'] ?></option>
+                <?php endforeach; ?>
+            </select>
+            <label><input type="checkbox" name="fidelidade"> Desconto Viva Saúde</label>
+            <button type="submit" name="btn_venda" class="btn-venda">PROCESSAR VENDA</button>
+        </form>
 
-        <label class="checkbox-area">
-            <input type="checkbox" name="fidelidade"> Ativar Desconto CPF (Viva Saúde)
-        </label>
+        <?php if ($resultado): ?>
+            <div style="background: #fffde7; padding: 15px; border: 1px dashed #fbc02d; margin-top: 15px;">
+                <strong>Recibo:</strong> <?= $resultado['nome'] ?><br>
+                Total: <strong style="color: #2e7d32; font-size: 1.2em;">R$ <?= number_format($resultado['final'], 2, ',', '.') ?></strong>
+            </div>
+        <?php endif; ?>
+    </div>
 
-        <button type="submit">PROCESSAR VENDA</button>
-    </form>
+    <div class="caixa" style="border-top-color: #2e7d32;">
+        <h2>➕ Novo Produto</h2>
+        <form method="POST">
+            <input type="text" name="ean" placeholder="EAN" required>
+            <input type="text" name="nome" placeholder="Nome do Medicamento" required>
+            <input type="number" step="0.01" name="preco" placeholder="Preço R$" required>
+            <select name="categoria">
+                <option value="Generico">Genérico</option>
+                <option value="Referencia">Referência</option>
+                <option value="Dermocosmetico">Dermocosmético</option>
+            </select>
+            <button type="submit" name="btn_cadastrar" class="btn-cadastrar">SALVAR NO BANCO</button>
+        </form>
+    </div>
 
-    <?php if ($resultado): ?>
-        <div class="cupom">
-            <strong>RECIBO DE VENDA</strong><hr>
-            Produto: <?= $resultado['nome'] ?><br>
-            Categoria: <?= $resultado['categoria'] ?><br>
-            Valor Base: R$ <?= number_format($resultado['original'], 2, ',', '.') ?><br>
-            Economia: <span style="color: #2e7d32;">R$ <?= number_format($resultado['economizou'], 2, ',', '.') ?></span><hr>
-            <div class="total">R$ <?= number_format($resultado['final'], 2, ',', '.') ?></div>
-        </div>
-    <?php endif; ?>
+    <div class="caixa estoque">
+        <h3>📦 Gerenciar Estoque</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>EAN</th>
+                    <th>Nome</th>
+                    <th>Preço</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($produtos_db as $p): ?>
+                <tr>
+                    <td><?= $p['ean'] ?></td>
+                    <td><?= $p['nome'] ?></td>
+                    <td>R$ <?= number_format($p['preco_tabela'], 2, ',', '.') ?></td>
+                    <td>
+                        <a href="?excluir=<?= $p['ean'] ?>" class="excluir" onclick="return confirm('Apagar este produto?')">EXCLUIR</a>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
 </div>
+<script>
+// Passamos os dados do PHP para o JavaScript com segurança
+const produtosJS = <?php echo json_encode($produtos_db); ?>;
+
+document.getElementsByName('produto_ean')[0].addEventListener('change', function() {
+    const eanSelecionado = this.value;
+    const produto = produtosJS.find(p => p.ean == eanSelecionado);
+    
+    if (produto) {
+        // Aqui você pode criar um elemento para mostrar o preço prévio
+        console.log("Preço atual: R$ " + produto.preco_tabela);
+        // Desafio: Tente fazer esse preço aparecer em um <span> ao lado do select!
+    }
+});
+</script>
 
 </body>
 </html>
